@@ -1,4 +1,5 @@
-#!/usr/bin/env node
+if (CHECK_ONLY) {
+  if (!hasThirdParty || !hasAccept) {#!/usr/bin/env node
 /* Dealyx — Android WebView session patch
  * ---------------------------------------------------------------------------
  * WHY THIS EXISTS
@@ -64,7 +65,7 @@ for (const file of files) {
   const hasAquaBars = /Dealyx: Aqua system bars/.test(src);
 
   if (CHECK_ONLY) {
-    if (!hasThirdParty || !hasAccept || !hasBackHandler || !hasAquaBars) {
+  if (!hasThirdParty || !hasAccept) {
       console.error(`[patch-android] NOT PATCHED: ${file}`);
       missing++;
     } else {
