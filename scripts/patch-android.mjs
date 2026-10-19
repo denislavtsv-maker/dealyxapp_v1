@@ -1,8 +1,7 @@
 ```js
 #!/usr/bin/env node
 
-import { readFileSync, writeFileSync } from 'node:fs';
-import { readdirSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 const ROOT = process.cwd();
@@ -10,7 +9,8 @@ const JAVA_DIR = join(ROOT, 'android', 'app', 'src', 'main', 'java');
 const CHECK_ONLY = process.argv.includes('--check');
 
 function walk(dir, out = []) {
-  let entries;
+  let entries = [];
+
   try {
     entries = readdirSync(dir);
   } catch {
@@ -18,23 +18,125 @@ function walk(dir, out = []) {
   }
 
   for (const name of entries) {
-    const p = join(dir, name);
-    let info;
+    const path = join(dir, name);
 
     try {
-      info = statSync(p);
-    } catch {
-      continue;
-    }
+      const info = statSync(path);
 
-    if (info.isDirectory()) {
-      walk(p, out);
-    } else if (name === 'MainActivity.java') {
-      out.push(p);
+      if (info.isDirectory()) {
+        walk(path, out);
+      } else if (name === 'MainActivity.java') {
+        out.push(path);
+      }
+    } catch {
+      // Ignore inaccessible files.
     }
   }
 
   return out;
+}
+
+function insertAfterOnCreate(src, block, file) {
+  const marker =
+    /super\.onCreate\s*\(\s*savedInstanceState\s*\)\s*;/;
+
+  if (!marker.test(src)) {
+    console.error(
+      '[patch-android] Cannot find super.onCreate(...) in ' + file
+    );
+    return null;
+  }
+
+  return src.replace(marker, function (match) {
+    return match + '\n\n' + block;
+  });
+}
+
+const cookieBlock = [
+  '// --- Dealyx: cross-site session persistence ---',
+  'android.webkit.CookieManager cookieManager =',
+  '    android.webkit.CookieManager.getInstance();',
+  'cookieManager.setAcceptCookie(true);',
+  'cookieManager.setAcceptThirdPartyCookies(getBridge().getWebView(), true);',
+  'cookieManager.flush();',
+  '// --- end Dealyx cookie patch ---'
+].join('\n');
+
+const aquaBlock = [
+  '// --- Dealyx: Aqua system bars ---',
+  'if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {',
+  '    getWindow().setNavigationBarColor(android.graphics.Color.rgb(0, 184, 199));',
+  '    getWindow().setStatusBarColor(android.graphics.Color.rgb(238, 251, 252));',
+  '}',
+  'if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {',
+  '    getWindow().getDecorView().setSystemUiVisibility(',
+  '        getWindow().getDecorView().getSystemUiVisibility()',
+  '        | android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR',
+  '        | android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);',
+  '}',
+  '// --- end Dealyx system bars ---'
+].join('\n');
+
+const backBlock = [
+  '// --- Dealyx: Android back navigates WebView history ---',
+  'getOnBackPressedDispatcher().addCallback(this,',
+  '    new androidx.activity.OnBackPressedCallback(true) {',
+  '        @Override',
+  '        public void handleOnBackPressed() {',
+  '            android.webkit.WebView webView = getBridge().getWebView();',
+  '            if (webView != null && webView.canGoBack()) {',
+  '                webView.goBack();',
+  '            } else {',
+  '                setEnabled(false);',
+  '                getOnBackPressedDispatcher().onBackPressed();',
+  '            }',
+  '        }',
+  '    });',
+  '// --- end Dealyx back handler ---'
+].join('\n');
+
+function addLifecycleFlush(src, method, file) {
+  const methodRegex = new RegExp(
+    'void\\s+' + method + '\\s*\\([^)]*\\)\\s*\\{'
+  );
+
+  const flushRegex = new RegExp(
+    'void\\s+' + method +
+    '\\s*\\([^)]*\\)\\s*\\{[^}]*CookieManager\\.getInstance\\(\\)\\.flush\\(\\)',
+    's'
+  );
+
+  if (flushRegex.test(src)) {
+    return src;
+  }
+
+  if (methodRegex.test(src)) {
+    return src.replace(methodRegex, function (match) {
+      return match +
+        '\n        try { android.webkit.CookieManager.getInstance().flush(); } catch (Exception ignored) {}';
+    });
+  }
+
+  const idx = src.lastIndexOf('}');
+
+  if (idx < 0) {
+    console.error('[patch-android] Invalid Java class: ' + file);
+    return null;
+  }
+
+  const override = [
+    '',
+    '    @Override',
+    '    public void ' + method + '() {',
+    '        try {',
+    '            android.webkit.CookieManager.getInstance().flush();',
+    '        } catch (Exception ignored) {}',
+    '        super.' + method + '();',
+    '    }',
+    ''
+  ].join('\n');
+
+  return src.slice(0, idx) + override + src.slice(idx);
 }
 
 const files = walk(JAVA_DIR);
@@ -46,157 +148,89 @@ if (!files.length) {
 }
 
 let changed = 0;
-let missing = 0;
+let failed = false;
 
 for (const file of files) {
-  let src = readFileSync(file, 'utf8');
-  const before = src;
-
-  const hasThirdParty =
-    /setAcceptThirdPartyCookies\s*\(/.test(src);
-  const hasAccept =
-    /setAcceptCookie\s*\(\s*true\s*\)/.test(src);
-  const hasBackHandler =
-    /Dealyx: Android back navigates WebView history/.test(src);
-  const hasAquaBars =
-    /Dealyx: Aqua system bars/.test(src);
-  const hasPauseFlush =
-    /void\s+onPause\s*\([^)]*\)\s*\{[^}]*CookieManager\.getInstance\(\)\.flush\(\)/s.test(src);
-  const hasStopFlush =
-    /void\s+onStop\s*\([^)]*\)\s*\{[^}]*CookieManager\.getInstance\(\)\.flush\(\)/s.test(src);
+  const original = readFileSync(file, 'utf8');
+  let src = original;
 
   if (!CHECK_ONLY) {
-    if (!hasThirdParty || !hasAccept ||
-        !hasBackHandler || !hasAquaBars) {
-      const marker =
-        /(super\.onCreate\s*\(\s*savedInstanceState\s*\)\s*;)/;
-
-      const injection = `$1
-
-        // --- Dealyx: cross-site session persistence ---
-        android.webkit.CookieManager cookieManager =
-            android.webkit.CookieManager.getInstance();
-        cookieManager.setAcceptCookie(true);
-        cookieManager.setAcceptThirdPartyCookies(
-            getBridge().getWebView(), true);
-        cookieManager.flush();
-
-        // --- Dealyx: Aqua system bars ---
-        if (android.os.Build.VERSION.SDK_INT >=
-                android.os.Build.VERSION_CODES.LOLLIPOP) {
-            getWindow().setNavigationBarColor(
-                android.graphics.Color.rgb(0, 184, 199));
-            getWindow().setStatusBarColor(
-                android.graphics.Color.rgb(238, 251, 252));
-        }
-
-        if (android.os.Build.VERSION.SDK_INT >=
-                android.os.Build.VERSION_CODES.O) {
-            getWindow().getDecorView().setSystemUiVisibility(
-                getWindow().getDecorView().getSystemUiVisibility()
-                | android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
-                | android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
-        }
-
-        // --- Dealyx: Android back navigates WebView history ---
-        getOnBackPressedDispatcher().addCallback(
-            this,
-            new androidx.activity.OnBackPressedCallback(true) {
-                @Override
-                public void handleOnBackPressed() {
-                    android.webkit.WebView webView =
-                        getBridge().getWebView();
-
-                    if (webView != null && webView.canGoBack()) {
-                        webView.goBack();
-                    } else {
-                        setEnabled(false);
-                        getOnBackPressedDispatcher().onBackPressed();
-                    }
-                }
-            });
-        // --- end Dealyx native patch ---`;
-
-      if (marker.test(src)) {
-        src = src.replace(marker, injection);
-      } else {
-        console.error(
-          '[patch-android] Could not find super.onCreate(...) in ' + file
-        );
-        process.exitCode = 1;
+    if (!src.includes('// --- Dealyx: cross-site session persistence ---')) {
+      const next = insertAfterOnCreate(src, cookieBlock, file);
+      if (next === null) {
+        failed = true;
         continue;
       }
+      src = next;
     }
 
-    for (const method of ['onPause', 'onStop']) {
-      const methodPattern = new RegExp(
-        `void\\s+${method}\\s*\\([^)]*\\)\\s*\\{`
-      );
-
-      const flushPattern = new RegExp(
-        `void\\s+${method}\\s*\\([^)]*\\)\\s*\\{[^}]*CookieManager\\.getInstance\\(\\)\\.flush\\(\\)`,
-        's'
-      );
-
-      if (!flushPattern.test(src)) {
-        if (methodPattern.test(src)) {
-          src = src.replace(
-            methodPattern,
-            match => match +
-              '\n        try { android.webkit.CookieManager.getInstance().flush(); } catch (Exception ignored) {}'
-          );
-        } else {
-          const idx = src.lastIndexOf('}');
-          if (idx < 0) {
-            console.error('[patch-android] Invalid Java class: ' + file);
-            process.exitCode = 1;
-            continue;
-          }
-
-          src = src.slice(0, idx) +
-            `
-    @Override
-    public void ${method}() {
-        try {
-            android.webkit.CookieManager.getInstance().flush();
-        } catch (Exception ignored) {}
-        super.${method}();
-    }
-` + src.slice(idx);
-        }
+    if (!src.includes('// --- Dealyx: Aqua system bars ---')) {
+      const next = insertAfterOnCreate(src, aquaBlock, file);
+      if (next === null) {
+        failed = true;
+        continue;
       }
+      src = next;
     }
 
-    if (src !== before) {
+    if (!src.includes('// --- Dealyx: Android back navigates WebView history ---')) {
+      const next = insertAfterOnCreate(src, backBlock, file);
+      if (next === null) {
+        failed = true;
+        continue;
+      }
+      src = next;
+    }
+
+    src = addLifecycleFlush(src, 'onPause', file);
+    if (src === null) {
+      failed = true;
+      continue;
+    }
+
+    src = addLifecycleFlush(src, 'onStop', file);
+    if (src === null) {
+      failed = true;
+      continue;
+    }
+
+    if (src !== original) {
       writeFileSync(file, src, 'utf8');
-      console.log('[patch-android] patched: ' + file);
       changed++;
+      console.log('[patch-android] patched: ' + file);
+    } else {
+      console.log('[patch-android] already patched: ' + file);
     }
   }
 
   const result = readFileSync(file, 'utf8');
-  const ok =
-    /setAcceptThirdPartyCookies\s*\(/.test(result) &&
-    /setAcceptCookie\s*\(\s*true\s*\)/.test(result) &&
-    /Dealyx: Android back navigates WebView history/.test(result) &&
-    /Dealyx: Aqua system bars/.test(result) &&
-    /void\s+onPause\s*\([^)]*\)\s*\{[^}]*CookieManager\.getInstance\(\)\.flush\(\)/s.test(result) &&
-    /void\s+onStop\s*\([^)]*\)\s*\{[^}]*CookieManager\.getInstance\(\)\.flush\(\)/s.test(result);
+
+  const checks = [
+    /setAcceptCookie\s*\(\s*true\s*\)/,
+    /setAcceptThirdPartyCookies\s*\(/,
+    /Dealyx: cross-site session persistence/,
+    /Dealyx: Aqua system bars/,
+    /Dealyx: Android back navigates WebView history/,
+    /void\s+onPause\s*\([^)]*\)\s*\{[^}]*CookieManager\.getInstance\(\)\.flush\(\)/s,
+    /void\s+onStop\s*\([^)]*\)\s*\{[^}]*CookieManager\.getInstance\(\)\.flush\(\)/s
+  ];
+
+  const ok = checks.every(function (pattern) {
+    return pattern.test(result);
+  });
 
   if (!ok) {
     console.error('[patch-android] NOT PATCHED: ' + file);
-    missing++;
+    failed = true;
   } else {
-    console.log('[patch-android] ok: ' + file);
+    console.log('[patch-android] verified: ' + file);
   }
 }
 
-if (missing > 0 || process.exitCode) {
-  console.error('[patch-android] WebView patch verification failed.');
-  process.exitCode = 1;
-} else {
-  console.log(
-    `[patch-android] done (${changed} file(s) changed)`
-  );
+if (failed) {
+  console.error('[patch-android] Patch verification failed.');
+  process.exit(1);
 }
+
+console.log('[patch-android] done (' + changed + ' file(s) changed)');
 ```
