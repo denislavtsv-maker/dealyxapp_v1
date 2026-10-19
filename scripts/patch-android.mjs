@@ -1,4 +1,3 @@
-```js
 #!/usr/bin/env node
 
 import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
