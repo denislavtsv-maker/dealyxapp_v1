@@ -1,134 +1,210 @@
+
 #!/usr/bin/env node
-/* Dealyx — Android WebView session patch
- * ---------------------------------------------------------------------------
- * WHY THIS EXISTS
- *   The Capacitor shell loads the live site from a remote origin
- *   (https://dealyx.online/?dealyx_app=1). Inside the WebView that is a
- *   cross-site context, and Android's WebView rejects third-party cookies by
- *   default. The session cookie is therefore never stored, so the login POST
- *   arrives with no session, the server answers `csrf`, and the member sees
- *   "Session expired" even with correct credentials.
- *
- *   No Java source is editable in this repository: `npx cap add android`
- *   GENERATES the native project during the build, so a hand-edited
- *   MainActivity.java would be thrown away on the next build. This script runs
- *   right after `cap add android` and applies the required changes to the
- *   generated file, which makes the fix reproducible and reviewable.
- *
- * WHAT IT CHANGES
- *   1. CookieManager.setAcceptCookie(true) and setAcceptThirdPartyCookies(webView, true)
- *   2. flush() on create/pause/stop so the cookie store is written to disk
- *      (without it, a cold start loses the session and re-prompts for login)
- *   3. Keeps the existing bridge/settings untouched otherwise.
- *
- * USAGE
- *   node scripts/patch-android.mjs            (patches MainActivity.java)
- *   node scripts/patch-android.mjs --check    (exit 1 if the patch is missing)
- */
+/* Dealyx — Android WebView cookie persistence patch */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 const ROOT = process.cwd();
-const JAVA_DIR = join(ROOT, 'android', 'app', 'src', 'main', 'java');
+const JAVA_DIR = join(
+  ROOT, 'android', 'app', 'src', 'main', 'java'
+);
 const CHECK_ONLY = process.argv.includes('--check');
+
+const COOKIE_SETUP = `
+        // Dealyx: persistent cross-site WebView cookies
+        android.webkit.CookieManager cookieManager =
+            android.webkit.CookieManager.getInstance();
+        cookieManager.setAcceptCookie(true);
+        cookieManager.setAcceptThirdPartyCookies(
+            getBridge().getWebView(), true
+        );
+        cookieManager.flush();
+        // End Dealyx cookie setup`;
+
+const PATCH_MARKER = 'Dealyx: persistent cross-site WebView cookies';
 
 function walk(dir, out = []) {
   let entries;
-  try { entries = readdirSync(dir); } catch { return out; }
-  for (const name of entries) {
-    const p = join(dir, name);
-    if (statSync(p).isDirectory()) walk(p, out);
-    else if (name === 'MainActivity.java') out.push(p);
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return out;
   }
+
+  for (const name of entries) {
+    const path = join(dir, name);
+    let info;
+
+    try {
+      info = statSync(path);
+    } catch {
+      continue;
+    }
+
+    if (info.isDirectory()) {
+      walk(path, out);
+    } else if (name === 'MainActivity.java') {
+      out.push(path);
+    }
+  }
+
   return out;
 }
 
+function patchSource(source, file) {
+  let src = source;
+
+  if (!src.includes('extends BridgeActivity')) {
+    throw new Error('MainActivity does not extend BridgeActivity');
+  }
+
+  if (!src.includes(PATCH_MARKER)) {
+    const onCreate = /public\s+void\s+onCreate\s*\(\s*Bundle\s+savedInstanceState\s*\)\s*\{/;
+
+    if (onCreate.test(src)) {
+      const start = src.match(onCreate);
+      const bodyStart = start.index + start[0].length;
+      const superCall =
+        /super\.onCreate\s*\(\s*savedInstanceState\s*\)\s*;/g;
+      superCall.lastIndex = bodyStart;
+      const match = superCall.exec(src);
+
+      if (!match) {
+        throw new Error(
+          'Found onCreate(), but could not locate super.onCreate(savedInstanceState)'
+        );
+      }
+
+      const end = match.index + match[0].length;
+      src = src.slice(0, end) + '\n' + COOKIE_SETUP + '\n' + src.slice(end);
+    } else {
+      const classEnd = src.lastIndexOf('}');
+
+      if (classEnd < 0) {
+        throw new Error('Could not locate the end of the Java class');
+      }
+
+      const method = `
+    @Override
+    public void onCreate(android.os.Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+${COOKIE_SETUP}
+    }
+
+`;
+
+      src = src.slice(0, classEnd) + method + src.slice(classEnd);
+    }
+  }
+
+  for (const method of ['onPause', 'onStop']) {
+    const signature = new RegExp(
+      `public\\\\s+void\\\\s+${method}\\\\s*\\\\(\\\\s*\\\\)`
+    );
+
+    if (!signature.test(src)) {
+      const classEnd = src.lastIndexOf('}');
+
+      if (classEnd < 0) {
+        throw new Error('Could not locate the end of the Java class');
+      }
+
+      const lifecycleMethod = `
+    @Override
+    public void ${method}() {
+        try {
+            android.webkit.CookieManager.getInstance().flush();
+        } catch (Exception ignored) {
+        }
+        super.${method}();
+    }
+
+`;
+
+      src = src.slice(0, classEnd) +
+        lifecycleMethod + src.slice(classEnd);
+    } else {
+      const methodRegex = new RegExp(
+        `(public\\\\s+void\\\\s+${method}\\\\s*\\\\(\\\\s*\\\\)\\\\s*\\\\{)`
+      );
+      const match = src.match(methodRegex);
+
+      if (match) {
+        const afterSignature = match.index + match[0].length;
+        const nextText = src.slice(afterSignature, afterSignature + 500);
+
+        if (!nextText.includes('CookieManager.getInstance().flush()')) {
+          src = src.slice(0, afterSignature) + `
+        try {
+            android.webkit.CookieManager.getInstance().flush();
+        } catch (Exception ignored) {
+        }
+` + src.slice(afterSignature);
+        }
+      }
+    }
+  }
+
+  return src;
+}
+
 const files = walk(JAVA_DIR);
+
 if (!files.length) {
-  console.error('[patch-android] No MainActivity.java found under ' + JAVA_DIR);
-  console.error('[patch-android] Run `npx cap add android` first.');
+  console.error('[patch-android] No MainActivity.java found.');
+  console.error('[patch-android] Run npx cap add android first.');
   process.exit(2);
 }
 
+let failures = 0;
 let changed = 0;
-let missing = 0;
 
 for (const file of files) {
-  let src = readFileSync(file, 'utf8');
-  const before = src;
+  try {
+    const original = readFileSync(file, 'utf8');
+    const patched = patchSource(original, file);
 
-  const hasThirdParty = /setAcceptThirdPartyCookies\s*\(/.test(src);
-  const hasAccept = /setAcceptCookie\s*\(\s*true\s*\)/.test(src);
+    if (CHECK_ONLY) {
+      const valid =
+        patched.includes(PATCH_MARKER) &&
+        /setAcceptCookie\s*\(\s*true\s*\)/.test(patched) &&
+        /setAcceptThirdPartyCookies\s*\(/.test(patched) &&
+        /public\s+void\s+onPause\s*\(/.test(patched) &&
+        /public\s+void\s+onStop\s*\(/.test(patched) &&
+        /CookieManager\.getInstance\(\)\.flush\(\)/.test(patched);
 
-  if (CHECK_ONLY) {
-    if (!hasThirdParty || !hasAccept) {
-      console.error(`[patch-android] NOT PATCHED: ${file}`);
-      missing++;
-    } else {
-      console.log(`[patch-android] ok: ${file}`);
-    }
-    continue;
-  }
+      if (!valid || patched !== original) {
+        console.error(`[patch-android] NOT PATCHED: ${file}`);
+        failures++;
+      } else {
+        console.log(`[patch-android] OK: ${file}`);
+      }
 
-  if (!hasThirdParty || !hasAccept) {
-    /* Insert the cookie setup immediately after the WebView is constructed.
-       Capacitor generates `public void onCreate(Bundle savedInstanceState)` with
-       `super.onCreate(savedInstanceState);` as its first statement. */
-    const marker = /(super\.onCreate\s*\(\s*savedInstanceState\s*\)\s*;)/;
-    const injection = `$1
-
-        // --- Dealyx: cross-site session persistence (added by scripts/patch-android.mjs) ---
-        android.webkit.CookieManager cookieManager = android.webkit.CookieManager.getInstance();
-        cookieManager.setAcceptCookie(true);
-        cookieManager.setAcceptThirdPartyCookies(getBridge().getWebView(), true);
-        cookieManager.flush();
-        // --- end Dealyx patch ---`;
-
-    if (marker.test(src)) {
-      src = src.replace(marker, injection);
-    } else {
-      console.error(`[patch-android] Could not find super.onCreate(...) in ${file}`);
       continue;
     }
-  }
 
-  /* Flush on pause/stop so the cookie jar survives process death. */
-  const lifecycle = [
-    ['onPause', '        super.onPause();'],
-    ['onStop', '        super.onStop();']
-  ];
-  for (const [method, superCall] of lifecycle) {
-    if (new RegExp(`void\\s+${method}\\s*\\(`).test(src)) {
-      if (!new RegExp(`void\\s+${method}\\s*\\([^)]*\\)\\s*\\{[^}]*flush\\(\\)`, 's').test(src)) {
-        src = src.replace(
-          new RegExp(`(void\\s+${method}\\s*\\([^)]*\\)\\s*\\{)`),
-          `$1\n        try { android.webkit.CookieManager.getInstance().flush(); } catch (Exception ignored) {}`
-        );
-      }
+    if (patched !== original) {
+      writeFileSync(file, patched, 'utf8');
+      console.log(`[patch-android] patched: ${file}`);
+      changed++;
     } else {
-      /* Add the override just before the final closing brace of the class. */
-      const idx = src.lastIndexOf('}');
-      if (idx > 0) {
-        src = src.slice(0, idx) +
-          `\n    @Override\n    public void ${method}() {\n        try { android.webkit.CookieManager.getInstance().flush(); } catch (Exception ignored) {}\n` +
-          superCall.replace('        ', '        ') + `\n    }\n` +
-          src.slice(idx);
-      }
+      console.log(`[patch-android] already patched: ${file}`);
     }
-  }
-
-  if (src !== before) {
-    writeFileSync(file, src, 'utf8');
-    console.log(`[patch-android] patched: ${file}`);
-    changed++;
-  } else {
-    console.log(`[patch-android] already up to date: ${file}`);
+  } catch (error) {
+    console.error(`[patch-android] ERROR: ${file}`);
+    console.error(error.message);
+    failures++;
   }
 }
 
-if (CHECK_ONLY && missing) {
-  console.error('[patch-android] The WebView cookie patch is MISSING.');
+if (failures > 0) {
+  console.error(`[patch-android] failed (${failures} file(s))`);
   process.exit(1);
 }
-console.log(`[patch-android] done (${changed} file(s) changed)`);
+
+console.log(
+  CHECK_ONLY
+    ? '[patch-android] verification passed'
+    : `[patch-android] done (${changed} file(s) changed)`
+);
