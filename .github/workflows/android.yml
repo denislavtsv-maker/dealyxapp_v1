@@ -33,6 +33,14 @@ jobs:
       - name: Install npm dependencies
         run: npm install --no-audit --no-fund
 
+        
+      - name: Debug patch script
+        run: |
+          git status --short
+          git log -1 --oneline
+          node --input-type=module -e "import {readFileSync} from 'node:fs'; const s=readFileSync('scripts/patch-android.mjs','utf8'); console.log(JSON.stringify(s.split(/\r?\n/).slice(0,5)))"
+
+
       - name: Verify TypeScript installation
         run: npx tsc --version
 
