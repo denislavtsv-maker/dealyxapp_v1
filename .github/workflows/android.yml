@@ -35,6 +35,10 @@ jobs:
       - name: Generate Android project
         run: npx cap add android
 
+      - name: Inspect MainActivity
+        run: |
+        cat android/app/src/main/java/online/dealyx/app/MainActivity.java
+      
       - name: Patch WebView session persistence
         run: node scripts/patch-android.mjs
 
