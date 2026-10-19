@@ -1,7 +1,7 @@
-if (CHECK_ONLY) {
-  if (!hasThirdParty || !hasAccept) {#!/usr/bin/env node
+#!/usr/bin/env node
+
 /* Dealyx — Android WebView session patch
- * ---------------------------------------------------------------------------
+ * ------------------------------------------------------------
  * WHY THIS EXISTS
  *   The Capacitor shell loads the live site from a remote origin
  *   (https://dealyx.online/?dealyx_app=1). Inside the WebView that is a
