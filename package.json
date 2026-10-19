@@ -1,3 +1,4 @@
+
 {
   "name": "dealyx-app",
   "version": "1.1.0",
@@ -21,6 +22,7 @@
   },
   "devDependencies": {
     "@capacitor/cli": "^7.4.3",
-    "@capacitor/assets": "^3.0.5"
+    "@capacitor/assets": "^3.0.5",
+    "typescript": "^5.8.3"
   }
 }
