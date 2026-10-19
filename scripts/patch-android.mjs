@@ -22,10 +22,12 @@ const COOKIE_SETUP = `
         cookieManager.flush();
         // End Dealyx cookie setup`;
 
-const PATCH_MARKER = 'Dealyx: persistent cross-site WebView cookies';
+const PATCH_MARKER =
+  'Dealyx: persistent cross-site WebView cookies';
 
 function walk(dir, out = []) {
   let entries;
+
   try {
     entries = readdirSync(dir);
   } catch {
@@ -52,21 +54,26 @@ function walk(dir, out = []) {
   return out;
 }
 
-function patchSource(source, file) {
+function patchSource(source) {
   let src = source;
 
   if (!src.includes('extends BridgeActivity')) {
-    throw new Error('MainActivity does not extend BridgeActivity');
+    throw new Error(
+      'MainActivity does not extend BridgeActivity'
+    );
   }
 
   if (!src.includes(PATCH_MARKER)) {
-    const onCreate = /public\s+void\s+onCreate\s*\(\s*Bundle\s+savedInstanceState\s*\)\s*\{/;
+    const onCreate =
+      /public\s+void\s+onCreate\s*\(\s*(?:android\.os\.)?Bundle\s+savedInstanceState\s*\)\s*\{/;
 
-    if (onCreate.test(src)) {
-      const start = src.match(onCreate);
+    const start = src.match(onCreate);
+
+    if (start) {
       const bodyStart = start.index + start[0].length;
       const superCall =
         /super\.onCreate\s*\(\s*savedInstanceState\s*\)\s*;/g;
+
       superCall.lastIndex = bodyStart;
       const match = superCall.exec(src);
 
@@ -77,12 +84,18 @@ function patchSource(source, file) {
       }
 
       const end = match.index + match[0].length;
-      src = src.slice(0, end) + '\n' + COOKIE_SETUP + '\n' + src.slice(end);
+
+      src =
+        src.slice(0, end) +
+        '\n' + COOKIE_SETUP + '\n' +
+        src.slice(end);
     } else {
       const classEnd = src.lastIndexOf('}');
 
       if (classEnd < 0) {
-        throw new Error('Could not locate the end of the Java class');
+        throw new Error(
+          'Could not locate the end of the Java class'
+        );
       }
 
       const method = `
@@ -94,20 +107,25 @@ ${COOKIE_SETUP}
 
 `;
 
-      src = src.slice(0, classEnd) + method + src.slice(classEnd);
+      src =
+        src.slice(0, classEnd) +
+        method +
+        src.slice(classEnd);
     }
   }
 
   for (const method of ['onPause', 'onStop']) {
     const signature = new RegExp(
-      `public\\\\s+void\\\\s+${method}\\\\s*\\\\(\\\\s*\\\\)`
+      `public\\s+void\\s+${method}\\s*\\(\\s*\\)`
     );
 
     if (!signature.test(src)) {
       const classEnd = src.lastIndexOf('}');
 
       if (classEnd < 0) {
-        throw new Error('Could not locate the end of the Java class');
+        throw new Error(
+          'Could not locate the end of the Java class'
+        );
       }
 
       const lifecycleMethod = `
@@ -122,25 +140,37 @@ ${COOKIE_SETUP}
 
 `;
 
-      src = src.slice(0, classEnd) +
-        lifecycleMethod + src.slice(classEnd);
+      src =
+        src.slice(0, classEnd) +
+        lifecycleMethod +
+        src.slice(classEnd);
     } else {
       const methodRegex = new RegExp(
-        `(public\\\\s+void\\\\s+${method}\\\\s*\\\\(\\\\s*\\\\)\\\\s*\\\\{)`
+        `(public\\s+void\\s+${method}\\s*\\(\\s*\\)\\s*\\{)`
       );
+
       const match = src.match(methodRegex);
 
       if (match) {
-        const afterSignature = match.index + match[0].length;
-        const nextText = src.slice(afterSignature, afterSignature + 500);
+        const afterSignature =
+          match.index + match[0].length;
+        const nextText =
+          src.slice(afterSignature, afterSignature + 500);
 
-        if (!nextText.includes('CookieManager.getInstance().flush()')) {
-          src = src.slice(0, afterSignature) + `
+        if (
+          !nextText.includes(
+            'CookieManager.getInstance().flush()'
+          )
+        ) {
+          src =
+            src.slice(0, afterSignature) +
+            `
         try {
             android.webkit.CookieManager.getInstance().flush();
         } catch (Exception ignored) {
         }
-` + src.slice(afterSignature);
+` +
+            src.slice(afterSignature);
         }
       }
     }
@@ -152,8 +182,12 @@ ${COOKIE_SETUP}
 const files = walk(JAVA_DIR);
 
 if (!files.length) {
-  console.error('[patch-android] No MainActivity.java found.');
-  console.error('[patch-android] Run npx cap add android first.');
+  console.error(
+    '[patch-android] No MainActivity.java found.'
+  );
+  console.error(
+    '[patch-android] Run npx cap add android first.'
+  );
   process.exit(2);
 }
 
@@ -163,7 +197,7 @@ let changed = 0;
 for (const file of files) {
   try {
     const original = readFileSync(file, 'utf8');
-    const patched = patchSource(original, file);
+    const patched = patchSource(original);
 
     if (CHECK_ONLY) {
       const valid =
@@ -175,7 +209,9 @@ for (const file of files) {
         /CookieManager\.getInstance\(\)\.flush\(\)/.test(patched);
 
       if (!valid || patched !== original) {
-        console.error(`[patch-android] NOT PATCHED: ${file}`);
+        console.error(
+          `[patch-android] NOT PATCHED: ${file}`
+        );
         failures++;
       } else {
         console.log(`[patch-android] OK: ${file}`);
@@ -189,7 +225,9 @@ for (const file of files) {
       console.log(`[patch-android] patched: ${file}`);
       changed++;
     } else {
-      console.log(`[patch-android] already patched: ${file}`);
+      console.log(
+        `[patch-android] already patched: ${file}`
+      );
     }
   } catch (error) {
     console.error(`[patch-android] ERROR: ${file}`);
@@ -199,7 +237,9 @@ for (const file of files) {
 }
 
 if (failures > 0) {
-  console.error(`[patch-android] failed (${failures} file(s))`);
+  console.error(
+    `[patch-android] failed (${failures} file(s))`
+  );
   process.exit(1);
 }
 
