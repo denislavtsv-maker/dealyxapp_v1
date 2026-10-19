@@ -232,4 +232,3 @@ if (failed) {
 }
 
 console.log('[patch-android] done (' + changed + ' file(s) changed)');
-```
