@@ -1,0 +1,26 @@
+{
+  "name": "dealyx-app",
+  "version": "1.1.0",
+  "private": true,
+  "description": "DEALYX Aqua-branded Android and iOS app shell using the Dealyx marketplace.",
+  "scripts": {
+    "sync": "cap sync",
+    "android": "cap open android",
+    "ios": "cap open ios",
+    "add:android": "cap add android",
+    "patch:android": "node scripts/patch-android.mjs",
+    "check:android": "node scripts/patch-android.mjs --check",
+    "add:ios": "cap add ios",
+    "assets:generate": "capacitor-assets generate --android --assetPath assets --iconBackgroundColor '#eefbfc' --iconBackgroundColorDark '#083344' --splashBackgroundColor '#eefbfc' --splashBackgroundColorDark '#083344'"
+  },
+  "dependencies": {
+    "@capacitor/core": "^7.4.3",
+    "@capacitor/android": "^7.4.3",
+    "@capacitor/ios": "^7.4.3",
+    "@capacitor/splash-screen": "^7.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.4.3",
+    "@capacitor/assets": "^3.0.5"
+  }
+}
