@@ -1,6 +1,3 @@
-
-#!/usr/bin/env node
-/* Dealyx — Android WebView cookie persistence patch */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
