@@ -1,4 +1,4 @@
-name: Build Dealyx Aqua Android App
+name: Build Dealyx Aqua Android App (Back Navigation)
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       APP_VERSION_CODE: ${{ github.run_number }}
-      APP_VERSION_NAME: 1.1.${{ github.run_number }}
+      APP_VERSION_NAME: 1.2.${{ github.run_number }}
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -32,16 +32,16 @@ jobs:
       - name: Install npm dependencies
         run: npm install --no-audit --no-fund
 
+      - name: Validate TypeScript Capacitor config
+        run: npx tsc --noEmit --skipLibCheck --moduleResolution bundler --module ESNext --target ES2020 capacitor.config.ts
+
       - name: Generate Android project
         run: npx cap add android
 
-      - name: Inspect MainActivity
-        run: cat android/app/src/main/java/online/dealyx/app/MainActivity.java
-      
       - name: Patch WebView session persistence
         run: node scripts/patch-android.mjs
 
-      - name: Verify session patch
+      - name: Verify WebView cookies and Android Back navigation
         run: node scripts/patch-android.mjs --check
 
       - name: Set Android version for upgrade builds
