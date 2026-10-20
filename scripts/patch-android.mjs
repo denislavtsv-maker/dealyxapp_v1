@@ -1,229 +1,157 @@
-
 #!/usr/bin/env node
-
-import fs from 'node:fs';
-import path from 'node:path';
+/* Dealyx — Android WebView session patch
+ * ---------------------------------------------------------------------------
+ * WHY THIS EXISTS
+ *   The Capacitor shell loads the live site from a remote origin
+ *   (https://dealyx.online/?dealyx_app=1). Inside the WebView that is a
+ *   cross-site context, and Android's WebView rejects third-party cookies by
+ *   default. The session cookie is therefore never stored, so the login POST
+ *   arrives with no session, the server answers `csrf`, and the member sees
+ *   "Session expired" even with correct credentials.
+ *
+ *   No Java source is editable in this repository: `npx cap add android`
+ *   GENERATES the native project during the build, so a hand-edited
+ *   MainActivity.java would be thrown away on the next build. This script runs
+ *   right after `cap add android` and applies the required changes to the
+ *   generated file, which makes the fix reproducible and reviewable.
+ *
+ * WHAT IT CHANGES
+ *   1. CookieManager.setAcceptCookie(true) and setAcceptThirdPartyCookies(webView, true)
+ *   2. flush() on create/pause/stop so the cookie store is written to disk
+ *      (without it, a cold start loses the session and re-prompts for login)
+ *   3. Keeps the existing bridge/settings untouched otherwise.
+ *
+ * USAGE
+ *   node scripts/patch-android.mjs            (patches MainActivity.java)
+ *   node scripts/patch-android.mjs --check    (exit 1 if the patch is missing)
+ */
+import { readFileSync, writeFileSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 
 const ROOT = process.cwd();
-const JAVA_DIR = path.join(
-  ROOT,
-  'android',
-  'app',
-  'src',
-  'main',
-  'java'
-);
-
+const JAVA_DIR = join(ROOT, 'android', 'app', 'src', 'main', 'java');
 const CHECK_ONLY = process.argv.includes('--check');
 
-function log(message) {
-  console.log(`[patch-android] ${message}`);
+function walk(dir, out = []) {
+  let entries;
+  try { entries = readdirSync(dir); } catch { return out; }
+  for (const name of entries) {
+    const p = join(dir, name);
+    if (statSync(p).isDirectory()) walk(p, out);
+    else if (name === 'MainActivity.java') out.push(p);
+  }
+  return out;
 }
 
-function fail(message) {
-  console.error(`[patch-android] ERROR: ${message}`);
+const files = walk(JAVA_DIR);
+if (!files.length) {
+  console.error('[patch-android] No MainActivity.java found under ' + JAVA_DIR);
+  console.error('[patch-android] Run `npx cap add android` first.');
+  process.exit(2);
+}
+
+let changed = 0;
+let missing = 0;
+
+for (const file of files) {
+  let src = readFileSync(file, 'utf8');
+  const before = src;
+
+  const hasThirdParty = /setAcceptThirdPartyCookies\s*\(/.test(src);
+  const hasAccept = /setAcceptCookie\s*\(\s*true\s*\)/.test(src);
+  const hasBackHandler = /Dealyx: Android back navigates WebView history/.test(src);
+  const hasAquaBars = /Dealyx: Aqua system bars/.test(src);
+
+  if (CHECK_ONLY) {
+    if (!hasThirdParty || !hasAccept || !hasBackHandler || !hasAquaBars) {
+      console.error(`[patch-android] NOT PATCHED: ${file}`);
+      missing++;
+    } else {
+      console.log(`[patch-android] ok: ${file}`);
+    }
+    continue;
+  }
+
+  if (!hasThirdParty || !hasAccept || !hasBackHandler || !hasAquaBars) {
+    /* Patch the generated activity, so changes survive every clean Capacitor build. */
+    const marker = /(super\.onCreate\s*\(\s*savedInstanceState\s*\)\s*;)/;
+    const injection = `$1
+
+        // --- Dealyx: cross-site session persistence ---
+        android.webkit.CookieManager cookieManager = android.webkit.CookieManager.getInstance();
+        cookieManager.setAcceptCookie(true);
+        cookieManager.setAcceptThirdPartyCookies(getBridge().getWebView(), true);
+        cookieManager.flush();
+
+        // --- Dealyx: Aqua system bars ---
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+            getWindow().setNavigationBarColor(android.graphics.Color.rgb(0, 184, 199));
+            getWindow().setStatusBarColor(android.graphics.Color.rgb(238, 251, 252));
+        }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            getWindow().getDecorView().setSystemUiVisibility(
+                getWindow().getDecorView().getSystemUiVisibility() | android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR | android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
+        }
+
+        // --- Dealyx: Android back navigates WebView history ---
+        getOnBackPressedDispatcher().addCallback(this, new androidx.activity.OnBackPressedCallback(true) {
+            @Override public void handleOnBackPressed() {
+                android.webkit.WebView webView = getBridge().getWebView();
+                if (webView != null && webView.canGoBack()) {
+                    webView.goBack();
+                } else {
+                    setEnabled(false);
+                    getOnBackPressedDispatcher().onBackPressed();
+                }
+            }
+        });
+        // --- end Dealyx native patch ---`;
+
+    if (marker.test(src)) {
+      src = src.replace(marker, injection);
+    } else {
+      console.error(`[patch-android] Could not find super.onCreate(...) in ${file}`);
+      continue;
+    }
+  }
+
+  /* Flush on pause/stop so the cookie jar survives process death. */
+  const lifecycle = [
+    ['onPause', '        super.onPause();'],
+    ['onStop', '        super.onStop();']
+  ];
+  for (const [method, superCall] of lifecycle) {
+    if (new RegExp(`void\\s+${method}\\s*\\(`).test(src)) {
+      if (!new RegExp(`void\\s+${method}\\s*\\([^)]*\\)\\s*\\{[^}]*flush\\(\\)`, 's').test(src)) {
+        src = src.replace(
+          new RegExp(`(void\\s+${method}\\s*\\([^)]*\\)\\s*\\{)`),
+          `$1\n        try { android.webkit.CookieManager.getInstance().flush(); } catch (Exception ignored) {}`
+        );
+      }
+    } else {
+      /* Add the override just before the final closing brace of the class. */
+      const idx = src.lastIndexOf('}');
+      if (idx > 0) {
+        src = src.slice(0, idx) +
+          `\n    @Override\n    public void ${method}() {\n        try { android.webkit.CookieManager.getInstance().flush(); } catch (Exception ignored) {}\n` +
+          superCall.replace('        ', '        ') + `\n    }\n` +
+          src.slice(idx);
+      }
+    }
+  }
+
+  if (src !== before) {
+    writeFileSync(file, src, 'utf8');
+    console.log(`[patch-android] patched: ${file}`);
+    changed++;
+  } else {
+    console.log(`[patch-android] already up to date: ${file}`);
+  }
+}
+
+if (CHECK_ONLY && missing) {
+  console.error('[patch-android] The WebView cookie patch is MISSING.');
   process.exit(1);
 }
-
-function findMainActivity(dir) {
-  if (!fs.existsSync(dir)) return null;
-
-  for (const entry of fs.readdirSync(dir, {
-    withFileTypes: true
-  })) {
-    const fullPath = path.join(dir, entry.name);
-
-    if (entry.isDirectory()) {
-      const result = findMainActivity(fullPath);
-      if (result) return result;
-    } else if (entry.name === 'MainActivity.java') {
-      return fullPath;
-    }
-  }
-
-  return null;
-}
-
-const file = findMainActivity(JAVA_DIR);
-
-if (!file) {
-  fail(`MainActivity.java not found under ${JAVA_DIR}`);
-}
-
-let source = fs.readFileSync(file, 'utf8');
-
-if (!source.includes('extends BridgeActivity')) {
-  fail('MainActivity does not extend BridgeActivity; refusing unsafe patch.');
-}
-
-if (CHECK_ONLY) {
-  if (!/void\s+onCreate\s*\(\s*Bundle\s+\w+\s*\)/.test(source)) {
-    fail('onCreate(Bundle) is missing.');
-  }
-
-  log('Check passed.');
-  process.exit(0);
-}
-
-function addImport(javaSource, importLine) {
-  if (javaSource.includes(importLine)) return javaSource;
-
-  const packageMatch = javaSource.match(/^package\s+[^;]+;\s*/m);
-
-  if (!packageMatch) {
-    fail('Could not find Java package declaration.');
-  }
-
-  const insertAt = packageMatch.index + packageMatch[0].length;
-
-  return (
-    javaSource.slice(0, insertAt) +
-    '\n' +
-    importLine +
-    javaSource.slice(insertAt)
-  );
-}
-
-source = addImport(source, 'import android.os.Bundle;');
-source = addImport(source, 'import android.graphics.Color;');
-source = addImport(source, 'import android.view.View;');
-source = addImport(source, 'import android.webkit.CookieManager;');
-source = addImport(source, 'import android.webkit.WebView;');
-source = addImport(source, 'import android.os.Build;');
-
-const classPattern =
-  /public\s+class\s+MainActivity\s+extends\s+BridgeActivity\s*\{/;
-
-if (!classPattern.test(source)) {
-  fail('Could not locate MainActivity class declaration.');
-}
-
-const onCreatePattern =
-  /@Override\s+public\s+void\s+onCreate\s*\(\s*Bundle\s+\w+\s*\)\s*\{[\s\S]*?\n\s*\}/;
-
-const patchedOnCreate = `@Override
-    public void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-
-        try {
-            CookieManager cookieManager = CookieManager.getInstance();
-            cookieManager.setAcceptCookie(true);
-
-            WebView webView = getBridge() != null
-                ? getBridge().getWebView()
-                : null;
-
-            if (webView != null) {
-                cookieManager.setAcceptThirdPartyCookies(webView, true);
-                webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
-            }
-        } catch (Exception e) {
-            android.util.Log.e(
-                "Dealyx",
-                "Could not configure WebView cookies",
-                e
-            );
-        }
-
-        try {
-            getWindow().setStatusBarColor(Color.rgb(0, 210, 220));
-            getWindow().setNavigationBarColor(Color.rgb(0, 210, 220));
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                getWindow().getDecorView().setSystemUiVisibility(0);
-            }
-        } catch (Exception e) {
-            android.util.Log.e(
-                "Dealyx",
-                "Could not configure system bars",
-                e
-            );
-        }
-    }`;
-
-if (!onCreatePattern.test(source)) {
-  source = source.replace(
-    classPattern,
-    (match) => `${match}\n    ${patchedOnCreate}\n`
-  );
-} else if (
-  !source.includes('Could not configure WebView cookies') ||
-  !source.includes('Could not configure system bars')
-) {
-  source = source.replace(onCreatePattern, patchedOnCreate);
-}
-
-if (
-  !source.includes('androidx.activity.OnBackPressedCallback') &&
-  !source.includes('getOnBackPressedDispatcher')
-) {
-  source = addImport(
-    source,
-    'import androidx.activity.OnBackPressedCallback;'
-  );
-
-  const backHandler = `
-    @Override
-    public void onBackPressed() {
-        if (getBridge() != null && getBridge().getWebView() != null) {
-            WebView webView = getBridge().getWebView();
-
-            if (webView.canGoBack()) {
-                webView.goBack();
-                return;
-            }
-        }
-
-        super.onBackPressed();
-    }
-`;
-
-  if (!source.includes('void onBackPressed(')) {
-    const lastBrace = source.lastIndexOf('}');
-
-    if (lastBrace < 0) {
-      fail('Could not find class closing brace.');
-    }
-
-    source =
-      source.slice(0, lastBrace) +
-      backHandler +
-      source.slice(lastBrace);
-  }
-}
-
-if (!source.includes('void onPause()')) {
-  const lifecycleMethods = `
-    @Override
-    public void onPause() {
-        try {
-            CookieManager.getInstance().flush();
-        } catch (Exception e) {
-            android.util.Log.w("Dealyx", "Cookie flush failed", e);
-        }
-        super.onPause();
-    }
-`;
-
-  const lastBrace = source.lastIndexOf('}');
-
-  source =
-    source.slice(0, lastBrace) +
-    lifecycleMethods +
-    source.slice(lastBrace);
-}
-
-fs.writeFileSync(file, source, 'utf8');
-
-const result = fs.readFileSync(file, 'utf8');
-
-if (!/void\s+onCreate\s*\(\s*Bundle\s+\w+\s*\)/.test(result)) {
-  fail('Verification failed: onCreate(Bundle) is missing.');
-}
-
-if (!result.includes('CookieManager.getInstance()')) {
-  fail('Verification failed: cookie configuration is missing.');
-}
-
-log('MainActivity patched successfully.');
-log(`Updated: ${file}`);
+console.log(`[patch-android] done (${changed} file(s) changed)`);
