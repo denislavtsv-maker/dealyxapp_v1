@@ -1,0 +1,23 @@
+{
+  "brand": {
+    "wordmarkSvg": "assets/logo.svg",
+    "wordmarkPng": "assets/logo.png",
+    "faviconSvg": "assets/favicon.svg",
+    "appIcon": "assets/icon.png",
+    "adaptiveIconForeground": "assets/icon-foreground.png",
+    "adaptiveIconBackground": "assets/icon-background.png",
+    "splash": "assets/splash.png",
+    "splashDark": "assets/splash-dark.png"
+  },
+  "library": {
+    "backgrounds": "assets/dealyx-library/backgrounds/",
+    "frames": "assets/dealyx-library/frames/",
+    "illustrations": "assets/dealyx-library/illustrations/"
+  },
+  "palette": {
+    "neonGreen": "#54ff79",
+    "mint": "#00f5c4",
+    "dark": "#020804",
+    "glow": "#d9ff9b"
+  }
+}

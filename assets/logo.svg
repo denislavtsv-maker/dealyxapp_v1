@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="170" viewBox="0 0 720 170" role="img" aria-labelledby="title desc">
+<title id="title">DEALYX — Neon Green</title><desc id="desc">Original Dealyx cyber crest and luminous lime-green wordmark.</desc>
+<defs>
+  <linearGradient id="lime" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f0ff9b"/><stop offset=".38" stop-color="#8dff68"/><stop offset=".72" stop-color="#33ff89"/><stop offset="1" stop-color="#00ffd0"/></linearGradient>
+  <linearGradient id="glass" x1="0" y1="0" x2="0.9" y2="1"><stop offset="0" stop-color="#133a22"/><stop offset=".55" stop-color="#071b13"/><stop offset="1" stop-color="#061018"/></linearGradient>
+  <filter id="outerGlow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="5" result="blur"/><feColorMatrix in="blur" type="matrix" values="0 0 0 0 .22 0 0 0 0 1 0 0 0 0 .42 0 0 0 .95 0" result="greenGlow"/><feMerge><feMergeNode in="greenGlow"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  <filter id="smallGlow" x="-30%" y="-50%" width="160%" height="200%"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+</defs>
+<!-- Angular shield/portal mark -->
+<g transform="translate(8 9)" filter="url(#outerGlow)" stroke-linejoin="round">
+  <path d="M63 3 111 25 128 66 113 111 72 146 28 128 5 87 14 43Z" fill="url(#glass)" stroke="url(#lime)" stroke-width="4.5"/>
+  <path d="M63 18 99 35 111 66 99 98 71 124 40 112 22 84 28 49Z" fill="none" stroke="url(#lime)" stroke-width="2.1" opacity=".82"/>
+  <path d="M34 51 52 38 52 101 82 78 98 88 51 119 34 108Z" fill="url(#lime)" stroke="#dffff0" stroke-width="1.5"/>
+  <path d="M63 13 75 30 63 43 50 29Z" fill="url(#lime)" stroke="#e6ffb2" stroke-width="1.5"/>
+  <path d="M8 68 24 68M109 42 126 34M111 103 127 111M45 139 43 153" stroke="#74ff91" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="63" cy="66" r="4" fill="#f2ffbd"/>
+</g>
+<!-- Wordmark -->
+<g filter="url(#smallGlow)">
+  <text x="154" y="91" font-family="Arial,Helvetica,sans-serif" font-size="76" font-weight="900" letter-spacing="3.2" fill="#f6fff8" stroke="#5dff87" stroke-width="1.25" paint-order="stroke">DEALYX</text>
+  <path d="M160 108H534" stroke="url(#lime)" stroke-width="3.3" stroke-linecap="round"/>
+  <circle cx="541" cy="108" r="4" fill="#9dff87"/>
+  <text x="162" y="137" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="700" letter-spacing="4.3" fill="#b7ffca">BUY • SELL • CONNECT</text>
+</g>
+</svg>

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="Dealyx neon green favicon">
+<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f0ff9b"/><stop offset=".4" stop-color="#8dff68"/><stop offset=".75" stop-color="#33ff89"/><stop offset="1" stop-color="#00ffd0"/></linearGradient><filter id="glow" x="-45%" y="-45%" width="190%" height="190%"><feGaussianBlur stdDeviation="2.6" result="b"/><feColorMatrix in="b" values="0 0 0 0 .18 0 0 0 0 1 0 0 0 0 .42 0 0 0 .95 0" result="g"/><feMerge><feMergeNode in="g"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+<path d="M32 3 54 14 61 32 53 50 32 61 11 51 3 32 11 12Z" fill="#061a10" stroke="url(#g)" stroke-width="2.7" filter="url(#glow)"/>
+<path d="M32 9 49 18 55 32 48 45 32 55 16 46 9 32 16 18Z" fill="none" stroke="url(#g)" stroke-width="1.7"/>
+<path d="M20 23 28 17 28 45 41 34 47 39 28 51 20 46Z" fill="url(#g)" stroke="#eaffd8" stroke-width=".7"/>
+<path d="M32 7 37 15 32 21 27 15Z" fill="url(#g)"/>
+</svg>
